@@ -21,9 +21,64 @@ param(
 $global:NewLine = [Environment]::NewLine
 # $global:CurrentDomain = ([System.Net.Dns]::GetHostByName((HostName)).HostName).Replace("$(HostName)","")
 # Write-Host $global:CurrentDomain
-
+$global:Report = @()
 
 # * FUNCTIONS
+
+function Add-ReportRecord() {
+    [CmdletBinding()] 
+    PARAM (
+        [Parameter(Mandatory = $true)]
+        [datetime]$StartDate,
+        [Parameter(Mandatory = $true)]
+        [datetime]$EndDate,
+        [Parameter(Mandatory = $true)]
+        [string]$FileName,
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [Parameter(Mandatory = $true)]
+        [string]$FileSize
+    )   
+
+    If (!Test-Path $Global:Report) { $Global:Report = @() }
+
+    Write-Host "Formating Record"
+    $tmpRec = Format-ReportRecord -StartDate $StartDate -EndDate $EndDate -FileName $FileName -FilePath $FilePath -FileSize $FileSize
+    Write-Host "Adding Record To Report List"
+    $global:Report += $tmpRec 
+    
+}
+
+function Format-ReportRecord() {
+    [CmdletBinding()] 
+    PARAM (
+        [Parameter(Mandatory = $true)]
+        [datetime]$StartDate,
+        [Parameter(Mandatory = $true)]
+        [datetime]$EndDate,
+        [Parameter(Mandatory = $true)]
+        [string]$FileName,
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [Parameter(Mandatory = $true)]
+        [string]$FileSize
+    )
+
+    $Duration = New-TimeSpan -Start $StartDate -End $EndDate 
+
+    $Results = New-Object -TypeName psobject
+    $Results | Add-Member -Member NoteProperty -Name "FileName" -Value $FileName
+    $Results | Add-Member -Member NoteProperty -Name "FullFilePath" -Value $FilePath
+    $Results | Add-Member -Member NoteProperty -Name "FileSize" -Value $FileSize
+    $Results | Add-Member -Member NoteProperty -Name "StartedOn" -Value $StartDate
+    $Results | Add-Member -Member NoteProperty -Name "CompletedOn" -Value $EndDate
+    $Results | Add-Member -Member NoteProperty -Name "Duration" -Value $Duration
+
+    $Results | Out-Host
+
+    return $Results
+
+}
 
 function Get-Filename($InitialDirectory = "") {
     [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
@@ -178,61 +233,69 @@ function Invoke-RedactFile() {
     $LineNo = 1
     $FileData = Get-Content $FileToRedact.FullName 
     $FileData | Out-Host
-    $FileLineCount = ($FileData | Measure-Object -Line).Lines
+    $FileLineCount = ($FileData | Measure-Object -Line).Lines # Does not count empty lines
 
     # ForEach ($Current_Line in [System.IO.File]::ReadLines($FileToRedact.FullName)) {
     ForEach ($Current_Line in $FileData) {
-        $RedactedString = $Current_Line
-        $CheckNumber = 0
-        Write-Debug "Line Data: $Current_Line"
-        $TotalChecks = ($global:config.SearchPatternRegEx | Measure-Object).Count
-        $NotFoundCount = 0
-        $FoundCount = 0 
+        If ($Cuurent_Line -ne "") {
+            $RedactedString = $Current_Line
+            $CheckNumber = 0
+            Write-Debug "Line Data: $Current_Line"
+            $TotalChecks = ($global:config.SearchPatternRegEx | Measure-Object).Count
+            $NotFoundCount = 0
+            $FoundCount = 0 
         
-        ForEach ($RegExCheck in $global:config.SearchPatternRegEx) {
+            ForEach ($RegExCheck in $global:config.SearchPatternRegEx) {
 
-            $RedactPatternName = $global:config.SearchPatternDesc[$CheckNumber]
-            If ($DebugPreference -eq "Continue") { Write-Host "" }
-            Write-Debug "Applying RegEx $($RedactPatternName) - $RegExCheck"
-            $Found = [RegEx]::Matches($RedactedString, $RegExCheck).Value # Could be one or more matches
-            If ($OutputDetail -Or $Found) { 
-                Write-Host "Line $($LineNo) of $FileLineCount in file $($FileToRedact.Name)" -NoNewline
-            }
+                $RedactPatternName = $global:config.SearchPatternDesc[$CheckNumber]
+                If ($DebugPreference -eq "Continue") { Write-Host "" }
+                Write-Debug "Applying RegEx $($RedactPatternName) - $RegExCheck"
+                $Found = [RegEx]::Matches($RedactedString, $RegExCheck).Value # Could be one or more matches
+                Write-Host "-" -ForegroundColor Green 
+                If ($OutputDetail -Or $Found) { 
+                    Write-Host "Line $LineNo of $FileLineCount in file $($FileToRedact.Name)" -NoNewline
+                }
 
-            If ($Found) {
-                Write-Host " - Matches Found"  # stop the -NoNewLine
+                Write-Host "." -NoNewline 
+                If ($Found) {
+                    Write-Host " - Matches Found"  # stop the -NoNewLine
              
-                $FoundCount += 1
-                ForEach ( $f in $Found ) {
+                    $FoundCount += 1
+                    ForEach ( $f in $Found ) {
 
-                    $OutRedactVal = "00000000$NextRedactionNo"
-                    $OutRedactSuffix = "____________________$($RedactPatternName)"
-                    $OutRedactVal = "#REDACTED_$($OutRedactVal.SubString($OutRedactVal.Length -7))$($OutRedactSuffix.Substring($OutRedactSuffix.Length -20))#"
-                    "$OutRedactVal `t $f" | Out-File -FilePath $TranslatedFileName -Append
-                    $RedactedString = $RedactedString.Replace($f, $OutRedactVal)
-                    Write-Host "$($RedactPatternName) $f" -ForegroundColor Green 
-                    Write-Debug "`tRedacted string is $RedacedString"
-                    $NextRedactionNo += 1
+                        $OutRedactVal = "00000000$NextRedactionNo"
+                        $OutRedactSuffix = "____________________$($RedactPatternName)"
+                        $OutRedactVal = "#REDACTED_$($OutRedactVal.SubString($OutRedactVal.Length -7))$($OutRedactSuffix.Substring($OutRedactSuffix.Length -20))#"
+                        "$OutRedactVal `t $f" | Out-File -FilePath $TranslatedFileName -Append
+                        $RedactedString = $RedactedString.Replace($f, $OutRedactVal)
+                        Write-Host "Pattern check Type [$($RedactPatternName)]  Pattern Match [$f]" -ForegroundColor Green 
+                        Write-Debug "`tRedacted string is $RedacedString"
+                        $NextRedactionNo += 1
+
+                    }
+                    Write-Debug "[$($Found)] = $Current_Line"
 
                 }
-                Write-Debug "[$($Found)] = $Current_Line"
+                Else {
+                    $NotFoundCount += 1
+                }
+                $CheckNumber += 1
 
             }
-            Else {
-                $NotFoundCount += 1
+            If ($NotFoundCount -eq $TotalChecks) {
+                # Write-Host "|" -ForegroundColor Green 
+                If ($OutputDetail) { Write-Host " - No Matches Found" -Forground Gray }
+                $RedactedString = $Current_Line
             }
-            $CheckNumber += 1
-
+            Write-Debug "NotFoundChecks: $NotFoundCount - TotalChecks: $TotalChecks"
+            Write-Debug "Final Redacted Line: $RedactedString"
+            $RedactedString | Out-File -FilePath $RedactedFileName -Append
+            $LineNo += 1
         }
-        If ($NotFoundCount -eq $TotalChecks) {
-            If ($OutputDetail) { Write-Host " - No Matches Found" -Forground Gray }
-            $RedactedString = $Current_Line
+        else {
+            Write-Debug "Line is empty"
+            $Current_Line | Out-File -FilePath $RedactedFileName -Append
         }
-        Write-Debug "NotFoundChecks: $NotFoundCount - TotalChecks: $TotalChecks"
-        Write-Debug "Final Redacted Line: $RedactedString"
-        $RedactedString | Out-File -FilePath $RedactedFileName -Append
-        $LineNo += 1
-
     }
 
 }
